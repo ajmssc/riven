@@ -45,8 +45,8 @@ jobs:
       uses: docker/metadata-action@v5
       with:
         images: |
-          ghcr.io/rivenmedia/riven
-          docker.io/spoked/riven
+          ghcr.io/ajmssc/riven
+          docker.io/ajmssc/riven
         flavor: |
           latest=auto
         tags: |
