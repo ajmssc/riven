@@ -76,7 +76,11 @@ async def download_user_info() -> DownloaderUserInfoResponse:
         # Get the downloader service from the program
         services = di[Program].services
 
-        assert services
+        if services is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Program services are not ready yet; try again in a few seconds.",
+            )
 
         downloader = services.downloader
 
@@ -134,8 +138,8 @@ async def download_user_info() -> DownloaderUserInfoResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting downloader user info: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.exception("Error getting downloader user info")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e!r}") from e
 
 
 @router.post(

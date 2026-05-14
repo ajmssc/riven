@@ -7,6 +7,7 @@ using the RivenVFS implementation.
 from typing import TYPE_CHECKING
 from loguru import logger
 
+from program.services.filesystem.fuse_available import is_fuse_available
 from program.services.filesystem.common_utils import get_items_to_update
 from program.services.downloaders import Downloader
 from program.core.runner import MediaItemGenerator, Runner, RunnerResult
@@ -34,8 +35,31 @@ class FilesystemService(Runner[FilesystemModel]):
     def get_key(cls) -> str:
         return "filesystem"
 
+    @property
+    def enabled(self) -> bool:
+        if not is_fuse_available():
+            return False
+        return super().enabled
+
+    @property
+    def initialized(self) -> bool:
+        if not is_fuse_available():
+            return True
+        return self.validate()
+
+    @initialized.setter
+    def initialized(self, value: bool) -> None:
+        pass
+
     def _initialize_rivenvfs(self, downloader: Downloader):
         """Initialize or synchronize RivenVFS"""
+        if not is_fuse_available():
+            logger.info(
+                "pyfuse3 is not installed; VFS (FUSE) is disabled. "
+                "Install the `fuse` extra to enable it."
+            )
+            return
+
         try:
             from .vfs import RivenVFS
 
@@ -125,13 +149,3 @@ class FilesystemService(Runner[FilesystemModel]):
             return False
 
         return True
-
-    @property
-    def initialized(self) -> bool:
-        """Check if the filesystem service is properly initialized"""
-        return self.validate()
-
-    @initialized.setter
-    def initialized(self, value: bool) -> None:
-        # Setting initialized is a no-op
-        pass

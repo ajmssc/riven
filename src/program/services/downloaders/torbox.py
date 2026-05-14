@@ -28,15 +28,35 @@ class TorBoxError(Exception):
     """Raised when TorBox returns an error payload or unexpected data."""
 
 
-def _unwrap_data(body: dict[str, Any]) -> Any:
-    """TorBox wraps payloads in ``data``; some errors use ``success: false``."""
+def _lower_key_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """TorBox JSON uses PascalCase in many responses (``Data``, ``TorrentId``, ``Plan``)."""
 
-    if body.get("success") is False:
-        detail = body.get("detail") or body.get("error") or body.get("message") or str(body)
+    return {str(k).lower(): v for k, v in d.items()}
+
+
+def _unwrap_data(body: dict[str, Any]) -> Any:
+    """Unwrap TorBox envelope (``data`` / ``Data``) and map API failures to ``TorBoxError``."""
+
+    success = body.get("success")
+    if success is None:
+        success = body.get("Success")
+
+    if success is False:
+        detail = (
+            body.get("detail")
+            or body.get("Detail")
+            or body.get("error")
+            or body.get("Error")
+            or body.get("message")
+            or str(body)
+        )
         raise TorBoxError(str(detail))
 
     if "data" in body:
         return body["data"]
+
+    if "Data" in body:
+        return body["Data"]
 
     return body
 
@@ -75,25 +95,26 @@ def _collect_file_dicts(node: Any) -> list[dict[str, Any]]:
             for item in obj:
                 walk(item)
         elif isinstance(obj, dict):
-            has_id = "id" in obj
-            name = obj.get("name") or obj.get("short_name") or obj.get("filename")
-            size = obj.get("size")
+            o = _lower_key_dict(obj)
+            has_id = "id" in o
+            name = o.get("name") or o.get("short_name") or o.get("filename")
+            size = o.get("size")
             if size is None:
-                size = obj.get("bytes")
+                size = o.get("bytes")
             if size is None:
-                size = obj.get("file_size")
+                size = o.get("file_size")
 
             if has_id and name is not None:
                 try:
-                    int(obj["id"])
+                    int(o["id"])
                 except (TypeError, ValueError):
                     pass
                 else:
-                    found.append(obj)
+                    found.append(o)
 
             for key in ("files", "children", "contents", "file_list", "items"):
-                if key in obj:
-                    walk(obj[key])
+                if key in o:
+                    walk(o[key])
 
     walk(node)
 
@@ -390,10 +411,14 @@ class TorBoxDownloader(DownloaderBase):
         if not isinstance(data, dict):
             raise TorBoxError("createtorrent returned unexpected data")
 
-        tid = data.get("torrent_id") or data.get("id")
+        d = _lower_key_dict(data)
+        tid = d.get("torrent_id") or d.get("torrentid") or d.get("id") or d.get("queuedid")
 
         if tid is None:
             raise TorBoxError("createtorrent returned no torrent_id")
+
+        if isinstance(tid, float):
+            tid = int(tid)
 
         return str(tid)
 
@@ -416,15 +441,22 @@ class TorBoxDownloader(DownloaderBase):
             if not data:
                 raise TorBoxError("empty mylist response")
 
-            row = next((x for x in data if str(x.get("id")) == str(torrent_id)), data[0])
+            def row_id(x: dict[str, Any]) -> str:
+                return str(_lower_key_dict(x).get("id", ""))
+
+            row = next((x for x in data if isinstance(x, dict) and row_id(x) == str(torrent_id)), data[0])
         elif isinstance(data, dict):
             row = data
         else:
             raise TorBoxError("unexpected mylist payload")
 
+        if not isinstance(row, dict):
+            raise TorBoxError("mylist row is not an object")
+
         return self._row_to_torrent_info(row)
 
     def _row_to_torrent_info(self, row: dict[str, Any]) -> TorrentInfo:
+        row = _lower_key_dict(row)
         tid = row.get("id")
         name = row.get("name") or row.get("title") or ""
         if isinstance(name, str) and "/" in name:
@@ -445,16 +477,21 @@ class TorBoxDownloader(DownloaderBase):
         tor = row.get("torrent")
 
         if isinstance(tor, dict) and not raw_files:
-            raw_files = tor.get("files") or []
+            raw_files = _lower_key_dict(tor).get("files") or []
 
         leafs = _collect_file_dicts(raw_files)
 
         if not leafs and isinstance(raw_files, list):
-            leafs = [x for x in raw_files if isinstance(x, dict) and "id" in x]
+            leafs = [
+                _lower_key_dict(x)
+                for x in raw_files
+                if isinstance(x, dict) and any(str(k).lower() == "id" for k in x)
+            ]
 
         files: dict[int, TorrentFile] = {}
 
         for f in leafs:
+            f = _lower_key_dict(f) if f else f
             try:
                 fid = int(f["id"])
             except (KeyError, TypeError, ValueError):
@@ -474,7 +511,7 @@ class TorBoxDownloader(DownloaderBase):
                 download_url="",
             )
 
-        added = row.get("created_at") or row.get("created") or row.get("added")
+        added = row.get("created_at") or row.get("created") or row.get("added") or row.get("createdat")
 
         created: datetime | None = None
 
@@ -532,16 +569,27 @@ class TorBoxDownloader(DownloaderBase):
                 logger.error("TorBox user/me returned unexpected data")
                 return None
 
-            plan = data.get("plan")
-            premium_ok = bool(plan) and plan != 0 and str(plan).lower() != "free"
+            d = _lower_key_dict(data)
+
+            plan = d.get("plan")
+            is_subscribed = d.get("issubscribed")
+
+            if is_subscribed is True:
+                premium_ok = True
+            elif isinstance(plan, (int, float)):
+                premium_ok = plan > 0
+            elif plan is not None:
+                premium_ok = str(plan).strip().lower() not in ("0", "free", "", "none")
+            else:
+                premium_ok = False
 
             expiration: datetime | None = None
             premium_days: int | None = None
 
             raw_exp = (
-                data.get("premium_expires_at")
-                or data.get("premiumExpiresAt")
-                or data.get("expires_at")
+                d.get("premium_expires_at")
+                or d.get("premiumexpiresat")
+                or d.get("expires_at")
             )
 
             if isinstance(raw_exp, str) and raw_exp:
@@ -557,16 +605,24 @@ class TorBoxDownloader(DownloaderBase):
                 except ValueError:
                     expiration = None
 
-            uid = data.get("id") or data.get("user_id") or data.get("email") or "unknown"
+            uid = d.get("id") or d.get("user_id") or d.get("email") or "unknown"
+
+            if isinstance(uid, float):
+                uid = int(uid)
 
             return UserInfo(
                 service="torbox",
-                username=data.get("username") or data.get("name"),
-                email=data.get("email"),
+                username=d.get("username") or d.get("name") or d.get("customer"),
+                email=d.get("email"),
                 user_id=uid,
                 premium_status="premium" if premium_ok else "free",
                 premium_expires_at=expiration.replace(tzinfo=None) if expiration else None,
                 premium_days_left=premium_days,
+                total_downloaded_bytes=(
+                    int(td)
+                    if isinstance((td := d.get("totaldownloaded")), (int, float))
+                    else None
+                ),
             )
         except CircuitBreakerOpen as e:
             logger.warning(f"Circuit breaker OPEN while getting TorBox user info: {e}")

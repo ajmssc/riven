@@ -827,10 +827,10 @@ class RivenVFS(pyfuse3.Operations):
         """
 
         from program.media.media_entry import MediaEntry
-        from program.media.item import MediaItem
         from program.program import Program
         from program.types import Event
         from routers.secure.items import apply_item_mutation
+        from sqlalchemy.orm import Session
 
         with db_session() as session:
             entry = (
@@ -845,7 +845,7 @@ class RivenVFS(pyfuse3.Operations):
             item: MediaItem = entry.media_item
             item_id = item.id
 
-            def mutation(i: MediaItem, s) -> None:
+            def mutation(i: MediaItem, s: Session) -> None:
                 i.blacklist_active_stream()
                 i.reset()
 
