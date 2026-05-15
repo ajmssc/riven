@@ -70,6 +70,23 @@ const CATEGORY_ORDER = [
 const STATE_ITEMS_LIMIT = 25;
 const YEAR_ITEMS_LIMIT = 25;
 
+/** Fixed order; aligned with backend downloader keys and GET `/services` map. */
+const DASHBOARD_DOWNLOADER_KEYS = ['realdebrid', 'alldebrid', 'debridlink', 'torbox'] as const;
+
+function getDownloaderExpiryWarning(service: {
+  premium_status?: string;
+  premium_days_left?: number | null;
+}): { text: string; modifier: 'expired' | 'soon' } | null {
+  if (service.premium_status === 'free') {
+    return { text: 'Premium expired', modifier: 'expired' };
+  }
+  const days = service.premium_days_left;
+  if (days == null || days >= 30) return null;
+  const text =
+    days <= 0 ? 'Subscription expired' : `Expires in ${days} day${days === 1 ? '' : 's'}`;
+  return { text, modifier: 'soon' };
+}
+
 type StateListItem = {
   id: number;
   title?: string;
@@ -183,7 +200,16 @@ function DashboardOverview({ route }: { route: AppRoute }) {
     { title: 'Symlinks', value: Number(stats?.total_symlinks || 0).toLocaleString(), sub: 'Mounted output links' },
   ];
 
-  const services = (downloader as any)?.services || [];
+  const userInfos = ((downloader as { services?: unknown[] }).services || []) as Record<string, unknown>[];
+  const userByService = Object.fromEntries(
+    userInfos.filter((u) => u && typeof u === 'object' && typeof (u as { service?: unknown }).service === 'string').map((u) => [(u as { service: string }).service, u]),
+  ) as Record<string, Record<string, unknown>>;
+
+  const downloaderRows = DASHBOARD_DOWNLOADER_KEYS.map((key) => ({
+    key,
+    user: userByService[key],
+    enabled: Boolean(servicesInfo.services[key]),
+  }));
 
   const activity = (stats?.activity || {}) as Record<string, number>;
   const activityEntries = Object.entries(activity)
@@ -251,39 +277,70 @@ function DashboardOverview({ route }: { route: AppRoute }) {
           <div className="section-head">
             <h2>Downloader Accounts</h2>
           </div>
-          {!services.length ? (
-            <p className="muted">No downloader service information.</p>
-          ) : (
-            services.map((service: any) => {
-              const warning =
-                service.premium_status === 'free'
-                  ? 'Premium expired'
-                  : service.premium_days_left != null && service.premium_days_left <= 7
-                    ? `Expires in ${service.premium_days_left} day${service.premium_days_left === 1 ? '' : 's'}`
-                    : null;
-              const email = service.email ? String(service.email).replace(/(.{3}).*@/, '$1***@') : null;
-              const displayName = service.username || email || 'Unknown account';
-              const expires = service.premium_expires_at != null ? new Date(service.premium_expires_at).toLocaleDateString() : '—';
-              const daysLeft = service.premium_days_left != null ? `${service.premium_days_left} days` : '—';
+          {downloaderRows.map(({ key, user: service, enabled }) => {
+              const expiryWarning = service ? getDownloaderExpiryWarning(service as { premium_status?: string; premium_days_left?: number | null }) : null;
+              const email =
+                service?.email != null ? String(service.email).replace(/(.{3}).*@/, '$1***@') : null;
+              const displayName = service
+                ? String(service.username || email || 'Unknown account')
+                : '—';
+              const expires =
+                service?.premium_expires_at != null
+                  ? new Date(String(service.premium_expires_at)).toLocaleDateString()
+                  : '—';
+              const daysLeft =
+                service?.premium_days_left != null ? `${service.premium_days_left} days` : '—';
               return (
-                <div key={service.service} className="downloader-card">
+                <div key={key} className="downloader-card">
                   <div className="downloader-card__head">
-                    <strong>{service.service}</strong>
-                    {warning && <span className={`downloader-warning ${service.premium_status === 'free' ? 'downloader-warning--expired' : 'downloader-warning--soon'}`}>{warning}</span>}
-                    <span className={`service-row__status ${service.premium_status === 'premium' ? 'service-row__status--up' : 'service-row__status--down'}`}>{service.premium_status}</span>
+                    <strong>{humanizeServiceKey(key)}</strong>
+                    <span
+                      className={`service-row__status ${enabled ? 'service-row__status--up' : 'service-row__status--down'}`}
+                    >
+                      {enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    {expiryWarning ? (
+                      <span className={`downloader-warning downloader-warning--${expiryWarning.modifier}`}>
+                        {expiryWarning.text}
+                      </span>
+                    ) : null}
+                    {service?.premium_status != null ? (
+                      <span
+                        className={`service-row__status ${service.premium_status === 'premium' ? 'service-row__status--up' : 'service-row__status--down'}`}
+                      >
+                        {String(service.premium_status)}
+                      </span>
+                    ) : null}
                   </div>
                   <dl className="downloader-card__meta">
-                    <dt>Account</dt><dd>{displayName}</dd>
-                    <dt>Expires</dt><dd>{expires}</dd>
-                    <dt>Days left</dt><dd>{daysLeft}</dd>
-                    {service.points != null && <><dt>Points</dt><dd>{String(service.points)}</dd></>}
-                    {service.total_downloaded_bytes != null && <><dt>Downloaded</dt><dd>{formatBytesDash(service.total_downloaded_bytes)}</dd></>}
-                    {service.cooldown_until != null && <><dt>Cooldown until</dt><dd>{new Date(service.cooldown_until).toLocaleString()}</dd></>}
+                    <dt>Account</dt>
+                    <dd>{displayName}</dd>
+                    <dt>Expires</dt>
+                    <dd>{expires}</dd>
+                    <dt>Days left</dt>
+                    <dd>{daysLeft}</dd>
+                    {service?.points != null && (
+                      <>
+                        <dt>Points</dt>
+                        <dd>{String(service.points)}</dd>
+                      </>
+                    )}
+                    {service?.total_downloaded_bytes != null && (
+                      <>
+                        <dt>Downloaded</dt>
+                        <dd>{formatBytesDash(service.total_downloaded_bytes as number)}</dd>
+                      </>
+                    )}
+                    {service?.cooldown_until != null && (
+                      <>
+                        <dt>Cooldown until</dt>
+                        <dd>{new Date(String(service.cooldown_until)).toLocaleString()}</dd>
+                      </>
+                    )}
                   </dl>
                 </div>
               );
-            })
-          )}
+            })}
         </Panel>
         <Panel>
           <div className="section-head">

@@ -21,6 +21,7 @@ import { creditsHaveContent } from './creditsUtils';
 import { DetailViewActionsToolbar } from '../../shared/ui/DetailViewActionsToolbar';
 import { apiDelete, apiGet, apiPost, getStreamUrl } from '../../shared/api/api';
 import { annotateLibraryStatus } from '../library/libraryStatus';
+import { readLibraryReturnRoute } from '../../shared/navigation/libraryReturnRoute';
 import { notify } from '../../shared/notifications/notify';
 import { formatEpisodeDisplayTitle } from '../../shared/utils/utils';
 import type { AppRoute } from '../../app/routeTypes';
@@ -439,8 +440,7 @@ export default function ItemDetailView({ route }: { route: AppRoute }) {
     );
   }
 
-  const returnRoute =
-    (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('riven_return_route')) || 'library';
+  const returnRoute = readLibraryReturnRoute() ?? 'library';
   const isEpisode = item.type === 'episode';
   const isSeason = item.type === 'season';
   const isShow = item.type === 'show';
