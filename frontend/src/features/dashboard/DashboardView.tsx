@@ -4,6 +4,10 @@ import { apiGet, apiPost } from '../../shared/api/api';
 import { notify } from '../../shared/notifications/notify';
 import { formatBytes as formatBytesUtil, formatEpisodeDisplayTitle } from '../../shared/utils/utils';
 import type { AppRoute } from '../../app/routeTypes';
+import {
+  getServiceNotConfiguredWarning,
+  humanizeServiceKey,
+} from './serviceSetupMessages';
 
 const PIPELINE_ORDER = ['Requested', 'Indexed', 'Scraped', 'Downloaded', 'Symlinked', 'Completed'];
 const OTHER_STATES = ['Unknown', 'Unreleased', 'Ongoing', 'PartiallyCompleted', 'Failed', 'Paused'];
@@ -18,6 +22,7 @@ const SERVICE_CATEGORIES: Record<string, string> = {
   realdebrid: 'Downloaders',
   alldebrid: 'Downloaders',
   debridlink: 'Downloaders',
+  torbox: 'Downloaders',
   prowlarr: 'Scrapers',
   jackett: 'Scrapers',
   aiostreams: 'Scrapers',
@@ -27,11 +32,20 @@ const SERVICE_CATEGORIES: Record<string, string> = {
   rarbg: 'Scrapers',
   torrentio: 'Scrapers',
   zilean: 'Scrapers',
+  indexer: 'Indexers',
   indexerservice: 'Indexers',
   updater: 'Updaters',
+  plexupdater: 'Updaters',
+  jellyfinupdater: 'Updaters',
+  embyupdater: 'Updaters',
+  consoleupdater: 'Updaters',
+  filesystem: 'Filesystem',
   filesystemservice: 'Filesystem',
   postprocessing: 'Post-processing',
+  post_processing: 'Post-processing',
+  subtitle: 'Post-processing',
   notificationservice: 'Notifications',
+  notifications: 'Notifications',
   naming_service: 'Filesystem',
   library_profile_matcher: 'Library',
 };
@@ -98,15 +112,34 @@ export default function DashboardView({ route }: { route: AppRoute }) {
 function DashboardOverview({ route }: { route: AppRoute }) {
   const [stats, setStats] = useState<Record<string, unknown>>({});
   const [downloader, setDownloader] = useState<Record<string, unknown>>({});
+  const [serviceStatus, setServiceStatus] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
-    const [statsRes, downloaderRes] = await Promise.all([
+    const [statsRes, downloaderRes, servicesRes] = await Promise.allSettled([
       apiGet('/stats'),
       apiGet('/downloader_user_info'),
+      apiGet('/services'),
     ]);
-    setStats(statsRes.data || {});
-    setDownloader(downloaderRes.data || {});
+
+    if (statsRes.status === 'fulfilled' && statsRes.value.ok) {
+      setStats(statsRes.value.data || {});
+    } else {
+      setStats({});
+    }
+
+    if (downloaderRes.status === 'fulfilled' && downloaderRes.value.ok) {
+      setDownloader(downloaderRes.value.data || {});
+    } else {
+      setDownloader({});
+    }
+
+    if (servicesRes.status === 'fulfilled' && servicesRes.value.ok) {
+      setServiceStatus((servicesRes.value.data || {}) as Record<string, boolean>);
+    } else {
+      setServiceStatus({});
+    }
+
     setLoading(false);
   }, []);
 
@@ -130,6 +163,10 @@ function DashboardOverview({ route }: { route: AppRoute }) {
   const statesObj = stats?.states as Record<string, number> | undefined;
   const completed = Number(statesObj?.Completed ?? 0);
   const completionRate = total ? ((completed / total) * 100).toFixed(1) : '0.0';
+
+  const inactiveServices = Object.entries(serviceStatus).filter(([, ok]) => !ok);
+  const inactivePreview = inactiveServices.slice(0, 14);
+  const inactiveOverflow = inactiveServices.length - inactivePreview.length;
 
   const kpis = [
     { title: 'Total Items', value: total.toLocaleString(), sub: 'All media entries' },
@@ -166,6 +203,33 @@ function DashboardOverview({ route }: { route: AppRoute }) {
           </button>
         }
       />
+      {inactiveServices.length > 0 ? (
+        <Panel className="dashboard-setup-warnings">
+          <div className="section-head">
+            <h2>Integrations not set up</h2>
+            <a href="#/dashboard-services" className="dashboard-setup-warnings__link">
+              Services view
+            </a>
+          </div>
+          <p className="dashboard-setup-warnings__lead muted">
+            These components reported DOWN (disabled, missing credentials, or failed validation). Configure them in
+            Settings if you need them.
+          </p>
+          <ul className="setup-warning-list">
+            {inactivePreview.map(([key]) => (
+              <li key={key} className="setup-warning-list__item">
+                <span className="setup-warning-list__name">{humanizeServiceKey(key)}</span>
+                <span className="setup-warning-list__hint">{getServiceNotConfiguredWarning(key)}</span>
+              </li>
+            ))}
+          </ul>
+          {inactiveOverflow > 0 ? (
+            <p className="muted dashboard-setup-warnings__more">
+              …and {inactiveOverflow} more — see the Services dashboard tab for the full list.
+            </p>
+          ) : null}
+        </Panel>
+      ) : null}
       <section className="kpi-grid">
         {kpis.map((k) => (
           <article key={k.title} className="kpi-card">
@@ -292,6 +356,7 @@ function DashboardServices({ route }: { route: AppRoute }) {
     entries.sort(([a], [b]) => a.localeCompare(b));
   }
   const orderedCategories = CATEGORY_ORDER.filter((c) => byCategory.has(c));
+  const downCount = Object.values(services).filter((v) => !v).length;
 
   return (
     <ViewLayout className="view-dashboard view-dashboard--services" view="dashboard-services">
@@ -301,25 +366,42 @@ function DashboardServices({ route }: { route: AppRoute }) {
       ) : orderedCategories.length === 0 ? (
         <p className="muted">No services payload.</p>
       ) : (
-        <div className="services-sections">
-          {orderedCategories.map((category) => (
-            <section key={category} className="services-section">
-              <h3 className="services-section__title">{category}</h3>
-              <div className="services-items">
-                {(byCategory.get(category)!).map(([name, isUp]) => (
-                  <div key={`${category}-${name}`} className="services-item">
-                    <span className="services-item__name">{name}</span>
-                    <span
-                      className={`service-row__status ${isUp ? 'service-row__status--up' : 'service-row__status--down'}`}
+        <>
+          {downCount > 0 ? (
+            <p className="dashboard-services-summary muted" role="status">
+              <strong>{downCount}</strong> integration{downCount === 1 ? '' : 's'} not initialized — each DOWN entry includes a short setup hint.
+            </p>
+          ) : null}
+          <div className="services-sections">
+            {orderedCategories.map((category) => (
+              <section key={category} className="services-section">
+                <h3 className="services-section__title">{category}</h3>
+                <div className="services-items">
+                  {(byCategory.get(category)!).map(([name, isUp]) => (
+                    <div
+                      key={`${category}-${name}`}
+                      className={`services-item ${isUp ? '' : 'services-item--down'}`}
                     >
-                      {isUp ? 'UP' : 'DOWN'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
+                      <div className="services-item__row">
+                        <span className="services-item__name" title={name}>
+                          {humanizeServiceKey(name)}
+                        </span>
+                        <span
+                          className={`service-row__status ${isUp ? 'service-row__status--up' : 'service-row__status--down'}`}
+                        >
+                          {isUp ? 'UP' : 'DOWN'}
+                        </span>
+                      </div>
+                      {!isUp ? (
+                        <p className="services-item__warning">{getServiceNotConfiguredWarning(name)}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </>
       )}
     </ViewLayout>
   );

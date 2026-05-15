@@ -56,7 +56,13 @@ class FilesystemService(Runner[FilesystemModel]):
         if not is_fuse_available():
             logger.info(
                 "pyfuse3 is not installed; VFS (FUSE) is disabled. "
-                "Install the `fuse` extra to enable it."
+                "Using in-memory mount inventory only (install the `fuse` extra for FUSE).",
+            )
+            from .vfs.mock_rivenvfs import MockRivenVFS
+
+            self.riven_vfs = MockRivenVFS(
+                mountpoint=str(self.settings.mount_path),
+                downloader=downloader,
             )
             return
 
@@ -85,7 +91,10 @@ class FilesystemService(Runner[FilesystemModel]):
 
     def run(self, item: "MediaItem") -> MediaItemGenerator:
         if not self.riven_vfs:
-            logger.error("RivenVFS not initialized")
+            logger.warning(
+                "RivenVFS not initialized (FUSE unavailable and mock VFS failed to attach); "
+                "skipping filesystem step for this item.",
+            )
             yield RunnerResult(media_items=[item])
             return
 

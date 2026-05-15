@@ -212,6 +212,27 @@ function posterUrl(item: { poster_path?: string | null }): string {
   return path.startsWith('http') ? path : `${TMDB_IMG}${path}`;
 }
 
+function EpisodeStreamCountPills({
+  streamsCount,
+  blacklistedCount,
+}: {
+  streamsCount?: number;
+  blacklistedCount?: number;
+}) {
+  const available = streamsCount ?? 0;
+  const blacklisted = blacklistedCount ?? 0;
+  return (
+    <div className="show-episode-stream-counts" aria-label="Scraped stream counts">
+      <span className="stream-count-pill stream-count-pill--available" title="Non-blacklisted streams">
+        Available: {available}
+      </span>
+      <span className="stream-count-pill stream-count-pill--blacklisted" title="Blacklisted streams">
+        Blacklisted: {blacklisted}
+      </span>
+    </div>
+  );
+}
+
 function SeasonsEpisodes({
   item,
   refresh,
@@ -331,6 +352,10 @@ function SeasonsEpisodes({
                       )}
                   </div>
                 </div>
+                <EpisodeStreamCountPills
+                  streamsCount={ep.streams_count}
+                  blacklistedCount={ep.blacklisted_streams_count}
+                />
                 <div className="media-list__actions">
                   {ep.id && (state === 'Requested' || state === 'Failed') && (
                     <button

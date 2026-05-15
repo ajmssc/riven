@@ -178,6 +178,20 @@ class StatesFilter(str, Enum):
     All = "All"
 
 
+def _extended_dict_for_item(session: Session, item: MediaItem) -> dict[str, Any]:
+    """Build extended payload with correct stream counts (ORM collections are often empty here)."""
+
+    if isinstance(item, Show):
+        ids: set[int] = {item.id}
+        for season in item.seasons:
+            ids.add(season.id)
+            ids.update(ep.id for ep in season.episodes)
+        cmap = MediaItem._batch_relation_stream_row_counts(session, ids)
+        return item.to_extended_dict(stream_counts_map=cmap)
+
+    return item.to_extended_dict()
+
+
 @router.get(
     "",
     summary="Search Media Items",
@@ -320,7 +334,7 @@ async def get_items(
         return ItemsResponse(
             success=True,
             items=[
-                item.to_extended_dict() if extended else item.to_dict()
+                _extended_dict_for_item(session, item) if extended else item.to_dict()
                 for item in items
             ],
             page=page,
@@ -623,7 +637,7 @@ async def get_item(
                 raise HTTPException(status_code=404, detail="Item not found")
 
             if extended:
-                return item.to_extended_dict()
+                return _extended_dict_for_item(session, item)
 
             return item.to_dict()
         except Exception as e:
@@ -1018,16 +1032,7 @@ def _streams_source_for_item(session: Session, item: MediaItem) -> tuple[MediaIt
     Return (owner, streams, blacklisted_streams) for the item.
     For episodes with no streams (e.g. season-pack flow), use the parent season's streams.
     """
-    streams = list(item.streams)
-    blacklisted = list(item.blacklisted_streams)
-    owner = item
-    if isinstance(item, Episode) and not streams:
-        season = session.get(Season, item.parent_id) if item.parent_id else None
-        if season:
-            owner = season
-            streams = list(season.streams)
-            blacklisted = list(season.blacklisted_streams)
-    return (owner, streams, blacklisted)
+    return item.streams_source_for_api(session=session)
 
 
 @router.get(
