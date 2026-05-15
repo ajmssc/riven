@@ -40,6 +40,12 @@ class Updater(Runner[None, BaseUpdater]):
             self.services[ConsoleUpdater] = ConsoleUpdater()
         self.initialized = self.validate()
 
+    @property
+    def uses_console_updater(self) -> bool:
+        """True when no Plex/Jellyfin/Emby updater is configured and the no-op console stand-in is used."""
+
+        return ConsoleUpdater in self.services
+
     def validate(self) -> bool:
         """Validate that at least one updater service is initialized."""
 

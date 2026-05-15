@@ -1,4 +1,10 @@
-/** Human labels and setup hints for backend `/services` keys (see default.py get_services). */
+/** Copy for runtime fallback modes (see GET `/services` → `mock_vfs`, `console_updater`). */
+
+export const MOCK_VFS_NOTICE =
+  'FUSE (pyfuse3) is not available — Riven is using an in-memory VFS inventory only. The Mount explorer still works; there is no real kernel mount. Install the fuse extra and pyfuse3 to use RivenVFS on disk.';
+
+export const CONSOLE_UPDATER_NOTICE =
+  'No Plex, Jellyfin, or Emby updater is configured — library refresh requests are logged only (console updater). Configure an updater under Settings → Updaters if you want your media server libraries to refresh automatically.';
 
 const LABELS: Record<string, string> = {
   realdebrid: 'Real-Debrid',
@@ -27,43 +33,8 @@ const LABELS: Record<string, string> = {
   plexupdater: 'Plex library refresh',
   jellyfinupdater: 'Jellyfin library refresh',
   embyupdater: 'Emby library refresh',
-  consoleupdater: 'Console updater (placeholder)',
-};
-
-/** Short guidance when a service reports initialized === false. */
-const SETUP_HELP: Record<string, string> = {
-  overseerr:
-    'Add your Overseerr base URL and API key under Content, and enable the integration.',
-  plexwatchlist: 'Enable Plex watchlist sync and complete Plex authentication in settings.',
-  listrr: 'Enable Listrr and set its URL / API key under Content.',
-  mdblist: 'Enable MDBList and configure your API key under Content.',
-  traktcontent: 'Enable Trakt and add OAuth credentials or API key under Content.',
-  realdebrid: 'Enable Real-Debrid and paste a valid API key under Downloaders.',
-  alldebrid: 'Enable AllDebrid and paste a valid API key under Downloaders.',
-  debridlink: 'Enable Debrid-Link and configure API access under Downloaders.',
-  torbox: 'Enable TorBox and set your API key under Downloaders.',
-  torrentio: 'Enable Torrentio and set its URL or options under Scrapers.',
-  aiostreams: 'Enable AIOStreams and provide required API configuration under Scrapers.',
-  comet: 'Enable Comet and set API key / URL as required under Scrapers.',
-  jackett: 'Enable Jackett and point Riven at your Jackett URL and API key.',
-  mediafusion: 'Enable Mediafusion and complete its API settings under Scrapers.',
-  orionoid: 'Enable Orionoid and add your API key under Scrapers.',
-  prowlarr: 'Enable Prowlarr and configure its base URL and API key under Scrapers.',
-  rarbg: 'Enable RARBG / mirror settings if you still use this scraper.',
-  zilean: 'Enable Zilean and set host, API key, or DMM options under Scrapers.',
-  indexer: 'Configure TMDB and/or TVDB API keys under Indexers so metadata can resolve.',
-  plexupdater: 'Under Updaters → Plex, set server URL, token, and library mapping for library refresh.',
-  jellyfinupdater: 'Under Updaters → Jellyfin, set server URL and API key for library refresh.',
-  embyupdater: 'Under Updaters → Emby, set server URL and API key for library refresh.',
-  consoleupdater:
-    'No Plex/Jellyfin/Emby updater is configured; Riven is using a no-op console updater. Add a real media server under Updaters if you want automatic library refresh.',
-  filesystem:
-    'With FUSE enabled, install pyfuse3, set mount_path, and ensure the mount succeeds. If you intentionally run without FUSE, only the in-memory mount inventory is used.',
-  post_processing: 'Review post-processing settings; sub-services may be disabled or misconfigured.',
-  subtitle:
-    'Enable subtitles under Post-processing, pick languages, and enable at least one provider (e.g. OpenSubtitles) with credentials.',
-  notifications:
-    'Enable notifications and add at least one Apprise service URL, or leave disabled if you do not need external alerts.',
+  console: 'Console updater',
+  consoleupdater: 'Console updater',
 };
 
 function normalizeKey(serviceKey: string): string {
@@ -78,10 +49,28 @@ export function humanizeServiceKey(serviceKey: string): string {
     .replace(/\b([a-z])/g, (m) => m.toUpperCase());
 }
 
-export function getServiceNotConfiguredWarning(serviceKey: string): string {
-  const k = normalizeKey(serviceKey);
-  return (
-    SETUP_HELP[k] ??
-    'Not initialized — enable it in Settings if you need it, add API keys or URLs, and check connectivity.'
-  );
+export type ParsedServicesResponse = {
+  services: Record<string, boolean>;
+  mockVfs: boolean;
+  consoleUpdater: boolean;
+};
+
+/** Supports wrapped `{ services, mock_vfs, console_updater }` and legacy flat maps. */
+export function parseServicesResponse(data: unknown): ParsedServicesResponse {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const o = data as Record<string, unknown>;
+    if (o.services && typeof o.services === 'object' && !Array.isArray(o.services)) {
+      return {
+        services: o.services as Record<string, boolean>,
+        mockVfs: Boolean(o.mock_vfs),
+        consoleUpdater: Boolean(o.console_updater),
+      };
+    }
+    return {
+      services: data as Record<string, boolean>,
+      mockVfs: false,
+      consoleUpdater: false,
+    };
+  }
+  return { services: {}, mockVfs: false, consoleUpdater: false };
 }

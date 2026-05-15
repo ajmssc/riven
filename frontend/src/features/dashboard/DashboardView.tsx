@@ -5,8 +5,11 @@ import { notify } from '../../shared/notifications/notify';
 import { formatBytes as formatBytesUtil, formatEpisodeDisplayTitle } from '../../shared/utils/utils';
 import type { AppRoute } from '../../app/routeTypes';
 import {
-  getServiceNotConfiguredWarning,
+  CONSOLE_UPDATER_NOTICE,
+  MOCK_VFS_NOTICE,
   humanizeServiceKey,
+  parseServicesResponse,
+  type ParsedServicesResponse,
 } from './serviceSetupMessages';
 
 const PIPELINE_ORDER = ['Requested', 'Indexed', 'Scraped', 'Downloaded', 'Symlinked', 'Completed'];
@@ -39,6 +42,7 @@ const SERVICE_CATEGORIES: Record<string, string> = {
   jellyfinupdater: 'Updaters',
   embyupdater: 'Updaters',
   consoleupdater: 'Updaters',
+  console: 'Updaters',
   filesystem: 'Filesystem',
   filesystemservice: 'Filesystem',
   postprocessing: 'Post-processing',
@@ -112,7 +116,11 @@ export default function DashboardView({ route }: { route: AppRoute }) {
 function DashboardOverview({ route }: { route: AppRoute }) {
   const [stats, setStats] = useState<Record<string, unknown>>({});
   const [downloader, setDownloader] = useState<Record<string, unknown>>({});
-  const [serviceStatus, setServiceStatus] = useState<Record<string, boolean>>({});
+  const [servicesInfo, setServicesInfo] = useState<ParsedServicesResponse>({
+    services: {},
+    mockVfs: false,
+    consoleUpdater: false,
+  });
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
@@ -135,9 +143,9 @@ function DashboardOverview({ route }: { route: AppRoute }) {
     }
 
     if (servicesRes.status === 'fulfilled' && servicesRes.value.ok) {
-      setServiceStatus((servicesRes.value.data || {}) as Record<string, boolean>);
+      setServicesInfo(parseServicesResponse(servicesRes.value.data));
     } else {
-      setServiceStatus({});
+      setServicesInfo({ services: {}, mockVfs: false, consoleUpdater: false });
     }
 
     setLoading(false);
@@ -164,9 +172,7 @@ function DashboardOverview({ route }: { route: AppRoute }) {
   const completed = Number(statesObj?.Completed ?? 0);
   const completionRate = total ? ((completed / total) * 100).toFixed(1) : '0.0';
 
-  const inactiveServices = Object.entries(serviceStatus).filter(([, ok]) => !ok);
-  const inactivePreview = inactiveServices.slice(0, 14);
-  const inactiveOverflow = inactiveServices.length - inactivePreview.length;
+  const showFallbackWarnings = servicesInfo.mockVfs || servicesInfo.consoleUpdater;
 
   const kpis = [
     { title: 'Total Items', value: total.toLocaleString(), sub: 'All media entries' },
@@ -203,31 +209,32 @@ function DashboardOverview({ route }: { route: AppRoute }) {
           </button>
         }
       />
-      {inactiveServices.length > 0 ? (
-        <Panel className="dashboard-setup-warnings">
+      {showFallbackWarnings ? (
+        <Panel className="dashboard-runtime-warnings">
           <div className="section-head">
-            <h2>Integrations not set up</h2>
-            <a href="#/dashboard-services" className="dashboard-setup-warnings__link">
-              Services view
+            <h2>Fallback integrations</h2>
+            <a href="#/dashboard-services" className="dashboard-runtime-warnings__link">
+              Services
             </a>
           </div>
-          <p className="dashboard-setup-warnings__lead muted">
-            These components reported DOWN (disabled, missing credentials, or failed validation). Configure them in
-            Settings if you need them.
+          <p className="dashboard-runtime-warnings__lead muted">
+            Riven is running with placeholder behavior for the items below. This is expected in some dev setups; add
+            real integrations in Settings when you need full behavior.
           </p>
-          <ul className="setup-warning-list">
-            {inactivePreview.map(([key]) => (
-              <li key={key} className="setup-warning-list__item">
-                <span className="setup-warning-list__name">{humanizeServiceKey(key)}</span>
-                <span className="setup-warning-list__hint">{getServiceNotConfiguredWarning(key)}</span>
+          <ul className="runtime-warning-list">
+            {servicesInfo.mockVfs ? (
+              <li key="mock-vfs" className="runtime-warning-list__item">
+                <strong>Mock VFS</strong>
+                <span className="runtime-warning-list__body">{MOCK_VFS_NOTICE}</span>
               </li>
-            ))}
+            ) : null}
+            {servicesInfo.consoleUpdater ? (
+              <li key="console-updater" className="runtime-warning-list__item">
+                <strong>Console updater</strong>
+                <span className="runtime-warning-list__body">{CONSOLE_UPDATER_NOTICE}</span>
+              </li>
+            ) : null}
           </ul>
-          {inactiveOverflow > 0 ? (
-            <p className="muted dashboard-setup-warnings__more">
-              …and {inactiveOverflow} more — see the Services dashboard tab for the full list.
-            </p>
-          ) : null}
         </Panel>
       ) : null}
       <section className="kpi-grid">
@@ -335,15 +342,22 @@ function DashboardOverview({ route }: { route: AppRoute }) {
 }
 
 function DashboardServices({ route }: { route: AppRoute }) {
-  const [services, setServices] = useState<Record<string, boolean>>({});
+  const [servicesInfo, setServicesInfo] = useState<ParsedServicesResponse>({
+    services: {},
+    mockVfs: false,
+    consoleUpdater: false,
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     apiGet('/services').then((res) => {
-      setServices(res.data || {});
+      setServicesInfo(parseServicesResponse(res.data));
       setLoading(false);
     });
   }, []);
+
+  const services = servicesInfo.services;
+  const showFallbackWarnings = servicesInfo.mockVfs || servicesInfo.consoleUpdater;
 
   const byCategory = new Map<string, [string, boolean][]>();
   for (const [name, status] of Object.entries(services)) {
@@ -356,7 +370,6 @@ function DashboardServices({ route }: { route: AppRoute }) {
     entries.sort(([a], [b]) => a.localeCompare(b));
   }
   const orderedCategories = CATEGORY_ORDER.filter((c) => byCategory.has(c));
-  const downCount = Object.values(services).filter((v) => !v).length;
 
   return (
     <ViewLayout className="view-dashboard view-dashboard--services" view="dashboard-services">
@@ -367,10 +380,24 @@ function DashboardServices({ route }: { route: AppRoute }) {
         <p className="muted">No services payload.</p>
       ) : (
         <>
-          {downCount > 0 ? (
-            <p className="dashboard-services-summary muted" role="status">
-              <strong>{downCount}</strong> integration{downCount === 1 ? '' : 's'} not initialized — each DOWN entry includes a short setup hint.
-            </p>
+          {showFallbackWarnings ? (
+            <Panel className="dashboard-runtime-warnings dashboard-runtime-warnings--inline">
+              <h3 className="runtime-warning-inline__title">Fallback mode</h3>
+              <ul className="runtime-warning-list">
+                {servicesInfo.mockVfs ? (
+                  <li key="mock-vfs" className="runtime-warning-list__item">
+                    <strong>Mock VFS</strong>
+                    <span className="runtime-warning-list__body">{MOCK_VFS_NOTICE}</span>
+                  </li>
+                ) : null}
+                {servicesInfo.consoleUpdater ? (
+                  <li key="console-updater" className="runtime-warning-list__item">
+                    <strong>Console updater</strong>
+                    <span className="runtime-warning-list__body">{CONSOLE_UPDATER_NOTICE}</span>
+                  </li>
+                ) : null}
+              </ul>
+            </Panel>
           ) : null}
           <div className="services-sections">
             {orderedCategories.map((category) => (
@@ -392,9 +419,6 @@ function DashboardServices({ route }: { route: AppRoute }) {
                           {isUp ? 'UP' : 'DOWN'}
                         </span>
                       </div>
-                      {!isUp ? (
-                        <p className="services-item__warning">{getServiceNotConfiguredWarning(name)}</p>
-                      ) : null}
                     </div>
                   ))}
                 </div>

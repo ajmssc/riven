@@ -155,9 +155,28 @@ async def generate_apikey() -> MessageResponse:
     return MessageResponse(message=new_key)
 
 
-@router.get("/services", operation_id="services")
-async def get_services() -> dict[str, bool]:
+class ServicesStatusResponse(BaseModel):
+    """Per-runner/sub-service initialization flags plus runtime fallback indicators."""
+
+    services: dict[str, bool] = Field(
+        default_factory=dict,
+        description="Service key → whether that integration initialized successfully",
+    )
+    mock_vfs: bool = Field(
+        default=False,
+        description="True when FUSE is unavailable and the in-memory VFS inventory is used",
+    )
+    console_updater: bool = Field(
+        default=False,
+        description="True when only the console (no-op) library updater is active",
+    )
+
+
+@router.get("/services", operation_id="services", response_model=ServicesStatusResponse)
+async def get_services() -> ServicesStatusResponse:
     data = dict[str, bool]()
+    mock_vfs = False
+    console_updater = False
 
     services = di[Program].services
 
@@ -173,7 +192,14 @@ async def get_services() -> dict[str, bool]:
             else:
                 data[service.key] = service.initialized
 
-    return data
+        mock_vfs = services.filesystem.uses_mock_vfs
+        console_updater = services.updater.uses_console_updater
+
+    return ServicesStatusResponse(
+        services=data,
+        mock_vfs=mock_vfs,
+        console_updater=console_updater,
+    )
 
 
 class TraktOAuthInitiateResponse(BaseModel):

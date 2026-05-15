@@ -36,6 +36,16 @@ class FilesystemService(Runner[FilesystemModel]):
         return "filesystem"
 
     @property
+    def uses_mock_vfs(self) -> bool:
+        """True when pyfuse3 is unavailable and the in-memory inventory backend is active."""
+
+        if self.riven_vfs is None:
+            return False
+        from program.services.filesystem.vfs.mock_rivenvfs import MockRivenVFS
+
+        return isinstance(self.riven_vfs, MockRivenVFS)
+
+    @property
     def enabled(self) -> bool:
         if not is_fuse_available():
             return False
