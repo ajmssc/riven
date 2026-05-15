@@ -595,11 +595,19 @@ async def get_vfs_stats() -> VFSStatsResponse:
 
     services = di[Program].services
 
-    assert services
+    if services is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Program services are not ready yet; try again in a few seconds.",
+        )
 
     vfs = services.filesystem.riven_vfs
 
-    assert vfs
+    if vfs is None:
+        raise HTTPException(
+            status_code=503,
+            detail="VFS is not available yet; filesystem service may still be starting.",
+        )
 
     try:
         cache_snapshot: dict[str, Any] = dict(di[Cache].metrics.snapshot())
