@@ -404,6 +404,223 @@
   font-weight: 400;
 }
 
+/* Dashboard — state distribution (movies / TV segmented bars) */
+.state-dist {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.state-dist-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.state-dist-row--compact-strip {
+  gap: 0.35rem;
+}
+
+.state-dist-row__head {
+  display: flex;
+  align-items: center;
+}
+
+.state-dist-row__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.25rem 0;
+  border: none;
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.state-dist-row__toggle:hover {
+  color: var(--accent);
+}
+
+.state-dist-row__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.state-dist-row__chevron {
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.state-dist__track-wrap {
+  width: 100%;
+}
+
+.state-dist__track {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  min-height: 22px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+}
+
+.state-dist-row--compact-strip .state-dist__track {
+  min-height: 11px;
+}
+
+.state-dist__segment {
+  margin: 0;
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  align-self: stretch;
+  transition: filter 0.12s ease;
+}
+
+.state-dist__segment:hover {
+  filter: brightness(1.09);
+}
+
+.state-dist__segment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+.state-dist__segment[data-state='Requested'],
+.state-dist-breakdown-row__fill[data-state='Requested'] {
+  background: #5c7cfa;
+}
+
+.state-dist__segment[data-state='Indexed'],
+.state-dist-breakdown-row__fill[data-state='Indexed'] {
+  background: #3dabf0;
+}
+
+.state-dist__segment[data-state='Scraped'],
+.state-dist-breakdown-row__fill[data-state='Scraped'] {
+  background: #2ebd9a;
+}
+
+.state-dist__segment[data-state='Downloaded'],
+.state-dist-breakdown-row__fill[data-state='Downloaded'] {
+  background: #59c269;
+}
+
+.state-dist__segment[data-state='Symlinked'],
+.state-dist-breakdown-row__fill[data-state='Symlinked'] {
+  background: #c0d84a;
+}
+
+.state-dist__segment[data-state='Completed'],
+.state-dist-breakdown-row__fill[data-state='Completed'] {
+  background: #1eb8ab;
+}
+
+.state-dist__segment[data-state='Unknown'],
+.state-dist-breakdown-row__fill[data-state='Unknown'] {
+  background: #8f96a8;
+}
+
+.state-dist__segment[data-state='Unreleased'],
+.state-dist-breakdown-row__fill[data-state='Unreleased'] {
+  background: #9f7aea;
+}
+
+.state-dist__segment[data-state='Ongoing'],
+.state-dist-breakdown-row__fill[data-state='Ongoing'] {
+  background: #f0a020;
+}
+
+.state-dist__segment[data-state='PartiallyCompleted'],
+.state-dist-breakdown-row__fill[data-state='PartiallyCompleted'] {
+  background: #e07050;
+}
+
+.state-dist__segment[data-state='Failed'],
+.state-dist-breakdown-row__fill[data-state='Failed'] {
+  background: var(--danger);
+}
+
+.state-dist__segment[data-state='Paused'],
+.state-dist-breakdown-row__fill[data-state='Paused'] {
+  background: #5c8f9e;
+}
+
+.state-dist-breakdown {
+  margin-top: 0.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.state-dist-breakdown__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.state-dist-breakdown__group--other {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--panel-border);
+}
+
+.state-dist-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(88px, 150px) 3rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.35rem 0.25rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.state-dist-breakdown-row:hover {
+  background: rgba(132, 150, 194, 0.07);
+}
+
+.state-dist-breakdown-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.state-dist-breakdown-row__label {
+  font-size: var(--font-size-1);
+  font-weight: 500;
+}
+
+.state-dist-breakdown-row__count {
+  font-size: var(--font-size-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  text-align: right;
+}
+
+.state-dist-breakdown-row__track {
+  height: 12px;
+  background: rgba(144, 162, 197, 0.14);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.state-dist-breakdown-row__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  min-width: 2px;
+}
+
 .state-items-modal .modal-inner {
   padding: 0;
 }

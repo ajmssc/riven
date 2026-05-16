@@ -13,7 +13,51 @@ import {
 } from './serviceSetupMessages';
 
 const PIPELINE_ORDER = ['Requested', 'Indexed', 'Scraped', 'Downloaded', 'Symlinked', 'Completed'];
-const OTHER_STATES = ['Unknown', 'Unreleased', 'Ongoing', 'PartiallyCompleted', 'Failed', 'Paused'];
+const OTHER_STATES_LEADING = ['Ongoing', 'PartiallyCompleted', 'Failed', 'Paused'];
+const OTHER_STATES = ['Unknown', 'Unreleased', ...OTHER_STATES_LEADING];
+
+/** Strip / orderedCounts left-to-right: Ongoing…Paused, then Unknown/Unreleased, then pipeline */
+const STATE_ORDER = [...OTHER_STATES_LEADING, 'Unknown', 'Unreleased', ...PIPELINE_ORDER];
+
+type StateDistScope = 'movies' | 'episodes';
+
+/** Minimum fraction of strip width for zero-count segments when total > 0 (renormalized after). */
+const STATE_SEGMENT_MIN_FRAC = 0.008;
+
+function countsFromStatsDict(dict: Record<string, unknown> | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!dict || typeof dict !== 'object') return out;
+  for (const key of STATE_ORDER) {
+    const v = dict[key];
+    const n = typeof v === 'number' ? v : Number(v ?? 0);
+    out[key] = Number.isFinite(n) ? n : 0;
+  }
+  return out;
+}
+
+function orderedCounts(dict: Record<string, number>): number[] {
+  return STATE_ORDER.map((name) => Number(dict[name] ?? 0));
+}
+
+/** Percents summing to ~100; equal slices when total is zero. */
+function segmentPercents(counts: number[]): number[] {
+  const n = counts.length;
+  if (n === 0) return [];
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (total === 0) return counts.map(() => 100 / n);
+  const weights = counts.map((c) => (c === 0 ? STATE_SEGMENT_MIN_FRAC : c));
+  const sum = weights.reduce((a, b) => a + b, 0);
+  return weights.map((w) => (w / sum) * 100);
+}
+
+function scopeMediaTypes(scope: StateDistScope): string[] {
+  return scope === 'movies' ? ['movie'] : ['episode'];
+}
+
+function libraryHashForScope(scope: StateDistScope, state: string): string {
+  const q = `state=${encodeURIComponent(state)}`;
+  return scope === 'movies' ? `#/movies?${q}` : `#/episodes?${q}`;
+}
 
 const SERVICE_CATEGORIES: Record<string, string> = {
   overseerr: 'Content',
@@ -488,9 +532,149 @@ function DashboardServices({ route }: { route: AppRoute }) {
   );
 }
 
-function DashboardStates({ route }: { route: AppRoute }) {
+function StateDistributionSection({
+  title,
+  scope,
+  countsDict,
+  expanded,
+  compactStrip,
+  onToggleExpand,
+  onCategoryPick,
+}: {
+  title: string;
+  scope: StateDistScope;
+  countsDict: Record<string, number>;
+  expanded: boolean;
+  compactStrip: boolean;
+  onToggleExpand: () => void;
+  onCategoryPick: (stateName: string) => void;
+}) {
+  const counts = orderedCounts(countsDict);
+  const percents = segmentPercents(counts);
+  const maxCount = Math.max(...counts, 1);
+
+  const rowClass = [
+    'state-dist-row',
+    compactStrip ? 'state-dist-row--compact-strip' : '',
+    expanded ? 'state-dist-row--expanded' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    <section className={rowClass}>
+      <div className="state-dist-row__head">
+        <button
+          type="button"
+          className="state-dist-row__toggle"
+          aria-expanded={expanded}
+          aria-controls={`state-dist-breakdown-${scope}`}
+          id={`state-dist-heading-${scope}`}
+          onClick={onToggleExpand}
+        >
+          <span className="state-dist-row__title">{title}</span>
+          <span className="state-dist-row__chevron" aria-hidden>
+            {expanded ? '▼' : '▶'}
+          </span>
+        </button>
+      </div>
+      <div className="state-dist__track-wrap">
+        <div className="state-dist__track" role="group" aria-labelledby={`state-dist-heading-${scope}`}>
+          {STATE_ORDER.map((name, i) => (
+            <button
+              key={name}
+              type="button"
+              className="state-dist__segment"
+              style={{
+                flexGrow: percents[i],
+                flexBasis: 0,
+                flexShrink: 1,
+                minWidth: counts[i] === 0 ? 6 : 3,
+              }}
+              data-state={name}
+              title={`${name}: ${counts[i].toLocaleString()}`}
+              aria-label={`${name}: ${counts[i].toLocaleString()} items`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCategoryPick(name);
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {expanded ? (
+        <div
+          className="state-dist-breakdown"
+          id={`state-dist-breakdown-${scope}`}
+          role="region"
+          aria-labelledby={`state-dist-heading-${scope}`}
+        >
+          <div className="state-dist-breakdown__group">
+            {PIPELINE_ORDER.map((name) => {
+              const idx = STATE_ORDER.indexOf(name);
+              const c = counts[idx];
+              const pct =
+                maxCount && c > 0 ? Math.max((c / maxCount) * 100, 6) : c === 0 ? 2 : 0;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className="state-dist-breakdown-row state-dist-breakdown-row--pipeline"
+                  data-state={name}
+                  onClick={() => onCategoryPick(name)}
+                >
+                  <span className="state-dist-breakdown-row__label">{name}</span>
+                  <span className="state-dist-breakdown-row__count">{c.toLocaleString()}</span>
+                  <span className="state-dist-breakdown-row__track">
+                    <span
+                      className="state-dist-breakdown-row__fill"
+                      style={{ width: `${pct}%` }}
+                      data-state={name}
+                    />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="state-dist-breakdown__group state-dist-breakdown__group--other">
+            {OTHER_STATES.map((name) => {
+              const idx = STATE_ORDER.indexOf(name);
+              const c = counts[idx];
+              const pct =
+                maxCount && c > 0 ? Math.max((c / maxCount) * 100, 6) : c === 0 ? 2 : 0;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className="state-dist-breakdown-row state-dist-breakdown-row--other"
+                  data-state={name}
+                  onClick={() => onCategoryPick(name)}
+                >
+                  <span className="state-dist-breakdown-row__label">{name}</span>
+                  <span className="state-dist-breakdown-row__count">{c.toLocaleString()}</span>
+                  <span className="state-dist-breakdown-row__track">
+                    <span
+                      className="state-dist-breakdown-row__fill"
+                      style={{ width: `${pct}%` }}
+                      data-state={name}
+                    />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DashboardStates({ route: _route }: { route: AppRoute }) {
   const [stats, setStats] = useState<Record<string, unknown>>({});
+  const [expanded, setExpanded] = useState<StateDistScope | null>(null);
   const [selectedState, setSelectedState] = useState<string | null>(null);
+  const [selectedScope, setSelectedScope] = useState<StateDistScope | null>(null);
   const [stateItems, setStateItems] = useState<StateListItem[]>([]);
   const [stateTotal, setStateTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -503,75 +687,130 @@ function DashboardStates({ route }: { route: AppRoute }) {
     });
   }, []);
 
-  const handleStateClick = useCallback(async (state: string) => {
+  const handleCategoryClick = useCallback(async (scope: StateDistScope, state: string) => {
+    setSelectedScope(scope);
     setSelectedState(state);
     setItemsLoading(true);
-    const res = await apiGet('/items', { states: [state], limit: STATE_ITEMS_LIMIT, page: 1 });
+    const res = await apiGet('/items', {
+      states: [state],
+      type: scopeMediaTypes(scope),
+      limit: STATE_ITEMS_LIMIT,
+      page: 1,
+    });
     setStateItems((res.data?.items ?? []) as StateListItem[]);
     setStateTotal(res.data?.total_items ?? 0);
     setItemsLoading(false);
   }, []);
 
-  const states = (stats?.states || {}) as Record<string, number>;
-  const getCount = (name: string) => Number(states[name] ?? 0);
+  /** Expand this row's breakdown whenever a strip or breakdown category is activated. */
+  const pickCategoryFromStrip = useCallback(
+    (scope: StateDistScope, stateName: string) => {
+      setExpanded(scope);
+      void handleCategoryClick(scope, stateName);
+    },
+    [handleCategoryClick],
+  );
+
+  const moviesCounts = countsFromStatsDict(stats.states_movies as Record<string, unknown> | undefined);
+  const episodesCounts = countsFromStatsDict(
+    (stats.states_episodes ?? stats.states_shows) as Record<string, unknown> | undefined,
+  );
+
+  const scopeLabel =
+    selectedScope === 'movies' ? 'Movies' : selectedScope === 'episodes' ? 'TV episodes' : '';
 
   return (
     <ViewLayout className="view-dashboard view-dashboard--states" view="dashboard-states">
-      <ViewHeader title="Dashboard — State Distribution" subtitle="Items by pipeline and other states." />
+      <ViewHeader
+        title="Dashboard — State Distribution"
+        subtitle="Movies and TV episodes by pipeline state."
+      />
       <Panel>
         <div className="section-head">
           <h2>State Distribution</h2>
         </div>
-        <div className="state-pipeline">
-          <div className="state-pipeline__row">
-            {PIPELINE_ORDER.map((name, i) => (
-              <span key={name}>
-                {i > 0 && <span className="state-pipeline__arrow" aria-hidden>→</span>}
-                <button type="button" className="state-pipeline__node" onClick={() => handleStateClick(name)}>
-                  <span className="state-pipeline__label">{name}</span>
-                  <span className="state-pipeline__count">{getCount(name)}</span>
-                </button>
-              </span>
-            ))}
+        {loading ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <div className="state-dist">
+            <StateDistributionSection
+              title="Movies"
+              scope="movies"
+              countsDict={moviesCounts}
+              expanded={expanded === 'movies'}
+              compactStrip={expanded !== null && expanded !== 'movies'}
+              onToggleExpand={() => setExpanded((e) => (e === 'movies' ? null : 'movies'))}
+              onCategoryPick={(stateName) => pickCategoryFromStrip('movies', stateName)}
+            />
+            <StateDistributionSection
+              title="TV Episodes"
+              scope="episodes"
+              countsDict={episodesCounts}
+              expanded={expanded === 'episodes'}
+              compactStrip={expanded !== null && expanded !== 'episodes'}
+              onToggleExpand={() => setExpanded((e) => (e === 'episodes' ? null : 'episodes'))}
+              onCategoryPick={(stateName) => pickCategoryFromStrip('episodes', stateName)}
+            />
           </div>
-          <div className="state-pipeline__row state-pipeline__row--other">
-            <span className="state-pipeline__other-label">Other</span>
-            {OTHER_STATES.map((name) => (
-              <button key={name} type="button" className="state-pipeline__node state-pipeline__node--other" onClick={() => handleStateClick(name)}>
-                <span className="state-pipeline__label">{name}</span>
-                <span className="state-pipeline__count">{getCount(name)}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
       </Panel>
       <Panel>
         <div className="section-head">
-          <h3>{selectedState ? `Items in state: ${selectedState}` : 'Items in state'}</h3>
+          <h3>
+            {selectedState && selectedScope
+              ? `${scopeLabel} — ${selectedState}`
+              : 'Items by category'}
+          </h3>
         </div>
         <div className="state-items-list">
-          {!selectedState && <p className="muted">Click a state above to list items.</p>}
-          {selectedState && itemsLoading && <p className="muted">Loading…</p>}
-          {selectedState && !itemsLoading && stateItems.length === 0 && <><p className="muted">No items in this state.</p><p className="state-items-footer"><a href={`#/library?state=${encodeURIComponent(selectedState)}`}>View all media</a></p></>}
-          {selectedState && !itemsLoading && stateItems.length > 0 && (
+          {!selectedState || !selectedScope ? (
+            <p className="muted">Click a segment or breakdown row to list titles.</p>
+          ) : null}
+          {selectedState && selectedScope && itemsLoading ? <p className="muted">Loading…</p> : null}
+          {selectedState && selectedScope && !itemsLoading && stateItems.length === 0 ? (
+            <>
+              <p className="muted">No items in this state.</p>
+              <p className="state-items-footer">
+                <a href={libraryHashForScope(selectedScope, selectedState)}>View in library</a>
+              </p>
+            </>
+          ) : null}
+          {selectedState && selectedScope && !itemsLoading && stateItems.length > 0 ? (
             <>
               <table className="state-items-table">
-                <thead><tr><th>Title</th><th>Type</th><th>Year</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Year</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {stateItems.map((item) => (
                     <tr key={item.id}>
-                      <td><a href={`#/item/${item.id}`}>{displayTitle(item)}</a></td>
-                      <td><span className={`legend-chip ${item.type === 'movie' ? 'legend-chip--movie' : 'legend-chip--tv'}`}>{item.type ?? '—'}</span></td>
+                      <td>
+                        <a href={`#/item/${item.id}`}>{displayTitle(item)}</a>
+                      </td>
+                      <td>
+                        <span
+                          className={`legend-chip ${item.type === 'movie' ? 'legend-chip--movie' : 'legend-chip--tv'}`}
+                        >
+                          {item.type ?? '—'}
+                        </span>
+                      </td>
                       <td>{item.year != null ? item.year : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <p className="state-items-footer">
-                <a href={`#/library?state=${encodeURIComponent(selectedState)}`}>View all media</a> ({stateTotal} in {selectedState})
+                <a href={libraryHashForScope(selectedScope, selectedState)}>
+                  View in library
+                </a>{' '}
+                ({stateTotal.toLocaleString()} in {selectedState})
               </p>
             </>
-          )}
+          ) : null}
         </div>
       </Panel>
     </ViewLayout>

@@ -262,6 +262,8 @@ class StatsResponse(BaseModel):
     total_symlinks: int
     incomplete_items: int
     states: dict[States, int]
+    states_movies: dict[States, int]
+    states_episodes: dict[States, int]
     activity: Annotated[
         dict[str, int],
         Field(
@@ -285,10 +287,10 @@ async def get_stats() -> StatsResponse:
     """
     Produce aggregated statistics for the media library and its items.
 
-    The response includes total counts for media items, movies, shows, seasons, and episodes; the total number of filesystem symlinks (determined by existence of FilesystemEntry records linked to movie or episode items); a mapping of each state to its item count; the number of incomplete items; and a mapping of incomplete item IDs to their scraped attempt counts.
+    The response includes total counts for media items, movies, shows, seasons, and episodes; symlink totals; global state counts (`states`); counts for movies (`states_movies`); counts for TV episodes (`states_episodes`, one row per episode); incomplete item counts; activity by request date; and release-year aggregates.
 
     Returns:
-        StatsResponse: Aggregated statistics with keys `total_items`, `total_movies`, `total_shows`, `total_seasons`, `total_episodes`, `total_symlinks`, `incomplete_items`, `incomplete_retries`, and `states`.
+        StatsResponse: Aggregated statistics including `states`, `states_movies`, `states_episodes`, and library totals.
     """
 
     with db_session() as session:
@@ -364,12 +366,20 @@ async def get_stats() -> StatsResponse:
                     incomplete_retries[media_item_id] = scraped_times
 
             states = dict[States, int]()
+            states_movies = dict[States, int]()
+            states_episodes = dict[States, int]()
 
             for state in States:
                 states[state] = conn.execute(
                     select(func.count(MediaItem.id)).where(
                         MediaItem.last_state == state
                     )
+                ).scalar_one()
+                states_movies[state] = conn.execute(
+                    select(func.count(Movie.id)).where(Movie.last_state == state)
+                ).scalar_one()
+                states_episodes[state] = conn.execute(
+                    select(func.count(Episode.id)).where(Episode.last_state == state)
                 ).scalar_one()
 
     return StatsResponse(
@@ -381,6 +391,8 @@ async def get_stats() -> StatsResponse:
         total_symlinks=total_symlinks,
         incomplete_items=len(incomplete_retries),
         states=states,
+        states_movies=states_movies,
+        states_episodes=states_episodes,
         activity=activity,
         media_year_releases=media_year_releases,
     )
