@@ -136,7 +136,7 @@ def test_smartresponse_xml_dot_access():
 
     xml = b"""<?xml version="1.0" encoding="UTF-8"?>
     <root>
-      <user id="42"><name>alice</name></user>
+      <user><id>42</id><name>alice</name></user>
     </root>"""
     resp = Response()
     resp.status_code = 200
@@ -144,8 +144,8 @@ def test_smartresponse_xml_dot_access():
     resp.headers["Content-Type"] = "application/xml"
 
     resp.__class__ = SmartResponse
-    # dot-notation via SimpleNamespace
-    assert resp.data.user.id == "42"
+    # dot-notation via SimpleNamespace (child elements only, not XML attributes)
+    assert resp.data.user.id.text.strip() == "42"
     assert resp.data.user.name.text.strip() == "alice"
 
 

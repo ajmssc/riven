@@ -79,7 +79,7 @@ class TestDuplicateHandling:
         }
 
         show = Show(show_data)
-        assert show.id == "tvdb_show_123456"
+        assert show.id is None  # auto-increment int, None until persisted
         assert show.tvdb_id == "123456"
         assert show.title == "Test Show"
         assert show.type == "show"
@@ -94,7 +94,7 @@ class TestDuplicateHandling:
         }
 
         movie = Movie(movie_data)
-        assert movie.id == "tmdb_movie_51876"
+        assert movie.id is None  # auto-increment int, None until persisted
         assert movie.tmdb_id == "51876"
         assert movie.title == "Test TMDB Movie"
         assert movie.type == "movie"
@@ -125,11 +125,11 @@ class TestDuplicateHandling:
 
     def test_media_item_log_string(self):
         """Test MediaItem log_string property."""
-        movie_data = {"imdb_id": "tt1234567", "title": "Test Movie", "year": 2023}
+        movie_data = {"imdb_id": "tt1234567", "year": 2023}
 
         movie = Movie(movie_data)
         log_string = movie.log_string
-        # log_string should contain the IMDB ID when title is not available
+        # log_string falls back to IMDB ID when title is not set
         assert "tt1234567" in log_string
 
 

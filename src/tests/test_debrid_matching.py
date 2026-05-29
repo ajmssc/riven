@@ -1,94 +1,115 @@
-from types import SimpleNamespace
+"""Tests for Downloader.match_file_to_item() — the successor to RealDebridDownloader._matches_item()."""
+from unittest.mock import MagicMock, patch
+
+import pytest
+from RTN import parse
 
 from program.media.item import Episode, Movie, Season, Show
-from program.services.downloaders.realdebrid import RealDebridDownloader
+from program.services.downloaders import Downloader
+from program.services.downloaders.models import (
+    DebridFile,
+    DownloadedTorrent,
+    TorrentContainer,
+    TorrentInfo,
+)
 
-realdebrid_downloader = RealDebridDownloader()
+
+def _make_downloader() -> Downloader:
+    dl = Downloader.__new__(Downloader)
+    dl.service = MagicMock()
+    return dl
+
+
+def _debrid_file(filename: str, filesize: int = 1_000_000_000) -> DebridFile:
+    return DebridFile(file_id=1, filename=filename, filesize=filesize)
+
+
+def _download_result(infohash: str = "abc123") -> DownloadedTorrent:
+    info = TorrentInfo(id=1, name="Test")
+    container = TorrentContainer(infohash=infohash)
+    return DownloadedTorrent(id=1, infohash=infohash, container=container, info=info)
+
+
+def _show_tree(title: str, season_num: int, ep_nums: list[int]):
+    show = Show({"title": title, "imdb_id": "tt1405406", "type": "show"})
+    season = Season({"number": season_num, "type": "season"})
+    episodes = [Episode({"number": n, "type": "episode"}) for n in ep_nums]
+    for ep in episodes:
+        season.add_episode(ep)
+        ep.parent = season
+    show.add_season(season)
+    season.parent = show
+    return show, season, episodes
 
 
 def test_matches_item_movie():
-    torrent_info = SimpleNamespace(
-        files=[
-            SimpleNamespace(path="Inception.mkv", selected=1, bytes=2_000_000_000),
-        ]
-    )
-    item = Movie({"imdb_id": "tt1375666", "requested_by": "user", "title": "Inception"})
-    assert realdebrid_downloader._matches_item(torrent_info, item) is True
+    dl = _make_downloader()
+    item = Movie({"imdb_id": "tt1375666", "title": "Inception", "type": "movie"})
+    file = _debrid_file("Inception.2010.1080p.mkv", 2_000_000_000)
+    file_data = parse("Inception.2010.1080p.mkv")
+    result_obj = _download_result()
+
+    with patch.object(dl, "_update_attributes"):
+        result = dl.match_file_to_item(item, file_data, file, result_obj)
+
+    assert result is True
 
 
 def test_matches_item_episode():
-    torrent_info = SimpleNamespace(
-        files=[
-            SimpleNamespace(
-                path="The Vampire Diaries s01e01.mkv", selected=1, bytes=800_000_000
-            ),
-        ]
-    )
-    parent_show = Show(
-        {"imdb_id": "tt1405406", "requested_by": "user", "title": "The Vampire Diaries"}
-    )
-    parent_season = Season({"number": 1})
-    episode = Episode({"number": 1})
-    parent_season.add_episode(episode)
-    parent_show.add_season(parent_season)
-    episode.parent = parent_season
-    parent_season.parent = parent_show
+    dl = _make_downloader()
+    show, season, episodes = _show_tree("The Vampire Diaries", 1, [1, 2])
+    ep = episodes[0]
 
-    assert realdebrid_downloader._matches_item(torrent_info, episode) is True
+    file = _debrid_file("The.Vampire.Diaries.S01E01.mkv", 800_000_000)
+    file_data = parse("The.Vampire.Diaries.S01E01.mkv")
+    result_obj = _download_result()
+
+    with patch.object(dl, "_update_attributes"):
+        result = dl.match_file_to_item(ep, file_data, file, result_obj, show=show)
+
+    assert result is True
 
 
 def test_matches_item_season():
-    torrent_info = SimpleNamespace(
-        files=[
-            SimpleNamespace(
-                path="The Vampire Diaries s01e01.mkv", selected=1, bytes=800_000_000
-            ),
-            SimpleNamespace(
-                path="The Vampire Diaries s01e02.mkv", selected=1, bytes=800_000_000
-            ),
-        ]
-    )
-    show = Show(
-        {"imdb_id": "tt1405406", "requested_by": "user", "title": "The Vampire Diaries"}
-    )
-    season = Season({"number": 1})
-    episode1 = Episode({"number": 1})
-    episode2 = Episode({"number": 2})
-    season.add_episode(episode1)
-    season.add_episode(episode2)
-    show.add_season(season)
+    dl = _make_downloader()
+    show, season, episodes = _show_tree("The Vampire Diaries", 1, [1, 2])
 
-    assert realdebrid_downloader._matches_item(torrent_info, season) is True
+    file = _debrid_file("The.Vampire.Diaries.S01E01.mkv", 800_000_000)
+    file_data = parse("The.Vampire.Diaries.S01E01.mkv")
+    result_obj = _download_result()
+
+    with patch.object(dl, "_update_attributes"):
+        result = dl.match_file_to_item(season, file_data, file, result_obj, show=show)
+
+    assert result is True
 
 
-def test_matches_item_partial_season():
-    torrent_info = SimpleNamespace(
-        files=[
-            SimpleNamespace(path="show_s01e01.mkv", selected=1, bytes=800_000_000),
-        ]
-    )
-    show = Show({"imdb_id": "tt1405406", "requested_by": "user", "title": "Test Show"})
-    season = Season({"number": 1})
-    episode1 = Episode({"number": 1})
-    episode2 = Episode({"number": 2})
-    season.add_episode(episode1)
-    season.add_episode(episode2)
-    show.add_season(season)
+def test_matches_item_episode_not_in_show():
+    """A file for episode 5 returns False when only episodes 1-2 exist in the show."""
+    dl = _make_downloader()
+    show, season, episodes = _show_tree("Test Show", 1, [1, 2])
+    ep1 = episodes[0]
 
-    assert realdebrid_downloader._matches_item(torrent_info, season) is False
+    file = _debrid_file("Test.Show.S01E05.mkv", 800_000_000)
+    file_data = parse("Test.Show.S01E05.mkv")
+    result_obj = _download_result()
 
+    with patch.object(dl, "_update_attributes"):
+        result = dl.match_file_to_item(ep1, file_data, file, result_obj, show=show)
 
-def test_matches_item_no_files():
-    torrent_info = SimpleNamespace()
-    item = Movie({"imdb_id": "tt1375666", "requested_by": "user", "title": "Inception"})
-    assert realdebrid_downloader._matches_item(torrent_info, item) is False
+    assert result is False
 
 
-def test_matches_item_no_selected_files():
-    torrent_info = SimpleNamespace(
-        files=[
-            SimpleNamespace(path="movie.mp4", selected=0, bytes=2_000_000_000),
-        ]
-    )
-    item = Movie({"imdb_id": "tt1375666", "requested_by": "user", "title": "Inception"})
-    assert realdebrid_downloader._matches_item(torrent_info, item) is False
+def test_matches_item_movie_with_tv_file():
+    """A TV-episode file does not match a movie item."""
+    dl = _make_downloader()
+    item = Movie({"imdb_id": "tt1375666", "title": "Inception", "type": "movie"})
+
+    file = _debrid_file("Inception.S01E01.mkv", 800_000_000)
+    file_data = parse("Inception.S01E01.mkv")
+    result_obj = _download_result()
+
+    with patch.object(dl, "_update_attributes"):
+        result = dl.match_file_to_item(item, file_data, file, result_obj)
+
+    assert result is False
