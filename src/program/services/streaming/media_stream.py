@@ -42,7 +42,10 @@ from .exceptions import (
     MediaStreamKilledException,
     DebridServiceLinkUnavailable,
 )
-from .exceptions.media_stream_data_exception import ByteLengthMismatchException
+from .exceptions.media_stream_data_exception import (
+    ByteLengthMismatchException,
+    EmptyDataException,
+)
 from .file_metadata import FileMetadata
 from .recent_reads import Read, RecentReads
 from .session_statistics import SessionStatistics
@@ -1124,46 +1127,71 @@ class MediaStream:
         if size <= 0:
             raise ValueError("Size must be positive")
 
-        async with self.establish_connection(
-            start=start,
-            end=start + size - 1,
-        ) as response:
-            data = await response.aread()
+        # Some providers answer a successful (200/206) ranged request with an empty
+        # or short body when the underlying CDN link has gone stale — the very thing
+        # the web /stream/file endpoint recovers from by re-unrestricting the URL.
+        # establish_connection() only refreshes on HTTP *error* statuses, so a stale
+        # link that still returns "200 OK" with a placeholder body slips through and
+        # surfaces as a hard EIO (EmptyDataException/ByteLengthMismatchException ->
+        # MediaStreamDataException -> errno.EIO) on the very first scan. That is what
+        # makes a Completed/symlinked item play fine from the web (refreshing path)
+        # yet fail from the filesystem with "Input/output error".
+        #
+        # Mirror the web path's resilience: on a bad body, refresh the unrestricted
+        # URL once and retry. Only if a fresh URL still yields a bad body do we give
+        # up — surfacing the link as unavailable (RivenVFS maps this to ENOENT and
+        # schedules a rescrape) instead of a hard I/O error that stalls Plex scans.
+        refreshed = False
 
-            n = len(data)
-            self.session_statistics.bytes_transferred += n
-            self._io_metrics.add_network(n)
+        while True:
+            async with self.establish_connection(
+                start=start,
+                end=start + size - 1,
+            ) as response:
+                data = await response.aread()
 
-            try:
-                verified_data = self._verify_scan_integrity(
-                    (start, start + size),
-                    data,
-                )
-            except ByteLengthMismatchException as e:
-                # Respect settings toggle; allow operators to fall back to strict behavior if desired.
-                if settings_manager.settings.stream.ignore_scan_length_mismatch_as_missing:
-                    # Some providers will return a short HTML/404 body whilst still
-                    # reporting a successful 200/206 response for the requested range.
-                    #
-                    # During scanning (header/footer/general_scan), this manifests as a
-                    # ByteLengthMismatchException. Treat this as a dead/unavailable link
-                    # so that higher layers (RivenVFS) can surface ENOENT to Plex rather
-                    # than a hard EIO that stalls library scans.
+                n = len(data)
+                self.session_statistics.bytes_transferred += n
+                self._io_metrics.add_network(n)
+
+                try:
+                    verified_data = self._verify_scan_integrity(
+                        (start, start + size),
+                        data,
+                    )
+                except (ByteLengthMismatchException, EmptyDataException) as e:
                     await response.aclose()
 
-                    raise DebridServiceLinkUnavailable(
-                        self.provider, self.target_url.value
-                    ) from e
+                    if not refreshed and await self._refresh_download_url():
+                        refreshed = True
 
-                raise
+                        logger.warning(
+                            self.build_log_message(
+                                f"Scan got {e.__class__.__name__}; refreshed CDN URL "
+                                "and retrying"
+                            )
+                        )
 
-            if should_cache:
-                await self._cache_chunk(
-                    start=start,
-                    data=verified_data[:size],
-                )
+                        continue
 
-            return verified_data
+                    # Respect settings toggle; allow operators to fall back to strict
+                    # behavior (a hard error) if they prefer.
+                    if (
+                        settings_manager.settings.stream.ignore_scan_length_mismatch_as_missing
+                    ):
+                        raise DebridServiceLinkUnavailable(
+                            self.provider, self.target_url.value
+                        ) from e
+
+                    raise
+
+                if should_cache:
+                    await self._cache_chunk(
+                        start=start,
+                        data=verified_data[:size],
+                    )
+
+                return verified_data
 
     async def _wait_until_chunks_ready(
         self,
