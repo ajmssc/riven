@@ -59,6 +59,24 @@ def test_get_downloader_queued_items_filters_and_defers():
     assert ready_row["deferred"] is False
 
 
+def _make_db_session_mock(item_id: int, last_state=States.Scraped):
+    """Return a context-manager mock for db_session() that yields a session
+    whose query returns a fake MediaItem-like object."""
+    fake_item = MagicMock()
+    fake_item.id = item_id
+    fake_item.last_state = last_state
+    fake_item.log_string = f"Item {item_id}"
+    fake_item.is_parent_blocked.return_value = False
+
+    session = MagicMock()
+    session.query.return_value.filter_by.return_value.options.return_value.one_or_none.return_value = fake_item
+
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=session)
+    cm.__exit__ = MagicMock(return_value=False)
+    return cm, fake_item
+
+
 def test_add_event_to_queue_upserts_duplicate_item_id():
     em = EventManager()
     now = datetime.now()
@@ -70,8 +88,10 @@ def test_add_event_to_queue_upserts_duplicate_item_id():
         run_at=now + timedelta(minutes=5),
     )
 
-    em.add_event_to_queue(first)
-    em.add_event_to_queue(second, log_message=False)
+    cm, _ = _make_db_session_mock(42)
+    with patch("program.managers.event_manager.db_session", return_value=cm):
+        em.add_event_to_queue(first)
+        em.add_event_to_queue(second, log_message=False)
 
     assert len(em._queued_events) == 1
     assert em._queued_events[0].run_at == second.run_at
@@ -1068,7 +1088,11 @@ def test_retry_failed_pipeline_item_downloader(monkeypatch):
     fake = FakeItem()
     monkeypatch.setattr(db_functions, "get_item_by_id", lambda i: fake if i == 5 else None)
 
-    assert em.retry_failed_pipeline_item(5) is True
+    cm, _ = _make_db_session_mock(5, last_state=States.Scraped)
+    with patch("program.managers.event_manager.db_session", return_value=cm):
+        result = em.retry_failed_pipeline_item(5)
+
+    assert result is True
     assert fake.last_state == States.Scraped
     assert any(e.item_id == 5 for e in em._queued_events)
     assert 5 not in em._recently_finished

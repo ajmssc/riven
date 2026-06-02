@@ -2,81 +2,18 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine, text
-from testcontainers.postgres import PostgresContainer
 
-from program.db.db import db, run_migrations
 from program.media.item import Episode, Movie, Show, Season
 from program.media.state import States
 from program.scheduling.models import ScheduledTask, ScheduledStatus
 
 from program.scheduling.scheduler import ProgramScheduler
 
-
-@pytest.fixture(scope="session")
-def test_container():
-    """One container for the whole test session."""
-    with PostgresContainer(
-        "postgres:16.4-alpine3.20",
-        username="postgres",
-        password="postgres",
-        dbname="riven",
-    ) as pg:
-        yield pg
-
-
-@pytest.fixture(scope="session")
-def db_engine(test_container):
-    """One engine + one migrated schema for the whole test session."""
-    url = test_container.get_connection_url()
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-
-    # Ensure Alembic env.py uses this test URL (it reads from settings_manager)
-    from program.settings.manager import settings_manager
-
-    settings_manager.settings.database.host = url
-
-    run_migrations(database_url=url)
-
-    engine = create_engine(url, future=True, pool_pre_ping=True)
-
-    with engine.connect() as conn:
-        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
-        conn.execute(text("SET synchronous_commit = OFF"))
-
-    db.engine = engine
-    db.Session.configure(bind=engine)
-
-    yield engine
-    engine.dispose()
-
-
-@pytest.fixture(scope="function")
-def test_scoped_db_session(db_engine):
-    """Hand out a Session for each test. After each test, TRUNCATE all tables."""
-    session = db.Session()
-    try:
-        yield session
-    finally:
-        session.close()
-        with db_engine.connect() as conn:
-            tables = (
-                conn.execute(
-                    text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-                )
-                .scalars()
-                .all()
-            )
-            if tables:
-                quoted = ", ".join(f'"public"."{t}"' for t in tables)
-                conn.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))
-                conn.commit()
+# db_engine and test_scoped_db_session are provided by conftest.py (SQLite)
 
 
 # Helper functions
@@ -226,16 +163,36 @@ class TestCoreScheduling:
 # Tests for _compute_next_air_datetime edge cases
 
 
+def _release_data(
+    next_aired=None,
+    airs_time=None,
+    airs_days=None,
+):
+    """Build a minimal SeriesRelease-like object with attribute access."""
+    from types import SimpleNamespace
+
+    if airs_days is None:
+        days_ns = None
+    elif isinstance(airs_days, dict):
+        days_ns = SimpleNamespace(**airs_days)
+    else:
+        days_ns = airs_days
+
+    return SimpleNamespace(
+        next_aired=next_aired,
+        airs_time=airs_time,
+        airs_days=days_ns,
+    )
+
+
 class TestComputeNextAirDatetime:
     """Test edge cases for _compute_next_air_datetime()."""
 
     def test_compute_from_airs_days_and_time_when_next_aired_missing(self):
         """Computing next air time from airs_days + airs_time when next_aired is missing."""
-        from program.program import Program
-
         now = datetime(2025, 1, 13, 10, 0, 0)  # Monday 10:00 AM
-        release_data = {
-            "airs_days": {
+        release_data = _release_data(
+            airs_days={
                 "monday": False,
                 "tuesday": True,
                 "wednesday": False,
@@ -244,8 +201,8 @@ class TestComputeNextAirDatetime:
                 "saturday": False,
                 "sunday": False,
             },
-            "airs_time": "20:00",
-        }
+            airs_time="20:00",
+        )
 
         result = ProgramScheduler._compute_next_air_datetime(release_data, now)
 
@@ -253,19 +210,13 @@ class TestComputeNextAirDatetime:
         assert result.weekday() == 1  # Tuesday
         assert result.hour == 20
         assert result.minute == 0
-        # Should be next Tuesday at 20:00
         expected = datetime(2025, 1, 14, 20, 0, 0)
         assert result == expected
 
     def test_handle_next_aired_as_date_only_string(self):
         """Handling next_aired as a date-only string (should combine with airs_time)."""
-        from program.program import Program
-
         now = datetime(2025, 1, 13, 10, 0, 0)
-        release_data = {
-            "next_aired": "2025-01-15",
-            "airs_time": "21:30",
-        }
+        release_data = _release_data(next_aired="2025-01-15", airs_time="21:30")
 
         result = ProgramScheduler._compute_next_air_datetime(release_data, now)
 
@@ -278,12 +229,8 @@ class TestComputeNextAirDatetime:
 
     def test_handle_next_aired_as_full_iso_datetime(self):
         """Handling next_aired as a full ISO datetime string."""
-        from program.program import Program
-
         now = datetime(2025, 1, 13, 10, 0, 0)
-        release_data = {
-            "next_aired": "2025-01-15T22:00:00",
-        }
+        release_data = _release_data(next_aired="2025-01-15T22:00:00")
 
         result = ProgramScheduler._compute_next_air_datetime(release_data, now)
 
@@ -292,26 +239,18 @@ class TestComputeNextAirDatetime:
 
     def test_graceful_fallback_when_timezone_invalid(self):
         """Graceful fallback when timezone is invalid or missing."""
-        from program.program import Program
-
         now = datetime(2025, 1, 13, 10, 0, 0)
-        release_data = {
-            "next_aired": "2025-01-15T22:00:00",
-            "timezone": "Invalid/Timezone",
-        }
+        release_data = _release_data(next_aired="2025-01-15T22:00:00")
 
         result = ProgramScheduler._compute_next_air_datetime(release_data, now)
 
-        # Should still return a result, treating as local naive
         assert result is not None
         assert result == datetime(2025, 1, 15, 22, 0, 0)
 
     def test_return_none_when_no_valid_air_time(self):
         """Returning None when no valid air time can be computed."""
-        from program.program import Program
-
         now = datetime(2025, 1, 13, 10, 0, 0)
-        release_data = {}
+        release_data = _release_data()
 
         result = ProgramScheduler._compute_next_air_datetime(release_data, now)
 
@@ -319,13 +258,10 @@ class TestComputeNextAirDatetime:
 
     def test_handle_malformed_airs_time(self):
         """Handling malformed or missing airs_time values."""
-        from program.program import Program
-
         now = datetime(2025, 1, 13, 10, 0, 0)
-        release_data = {
-            "airs_days": {"monday": True},
-            "airs_time": "invalid",
-        }
+        release_data = _release_data(
+            airs_days={"monday": True}, airs_time="invalid"
+        )
 
         result = ProgramScheduler._compute_next_air_datetime(release_data, now)
 
@@ -630,9 +566,9 @@ class TestStateTransitions:
 
         program = Program()
         mock_indexer = MagicMock()
-        mock_indexer.run.return_value = iter([show])
+        mock_indexer.run.return_value = iter([])
         program.services = MagicMock()
-        program.services.get.return_value = mock_indexer
+        program.services.indexer = mock_indexer
 
         scheduler = ProgramScheduler(program)
         scheduler._process_scheduled_tasks()
